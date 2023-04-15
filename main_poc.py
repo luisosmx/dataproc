@@ -3,6 +3,7 @@ from pyspark.sql import SparkSession
 import requests
 from bs4 import BeautifulSoup
 from pyspark.sql import DataFrame
+from pyspark.sql.types import StructType, StructField, StringType
 
 spark = SparkSession \
   .builder \
@@ -11,55 +12,40 @@ spark = SparkSession \
   .getOrCreate()
 
 # GET request to URL:
-url = "https://www.formula1.com/en/results.html/2022/drivers.html"
-response = requests.get(url)
+#url = "https://www.formula1.com/en/results.html/2022/drivers.html"
+#response = requests.get(url)
 
 def data_extraction(response) -> DataFrame:
-    from pyspark.sql.types import StructType,StructField, StringType, IntegerType
-    data2 = [("James","","Smith","36636","M",3000),
-        ("Michael","Rose","","40288","M",4000),
-        ("Robert","","Williams","42114","M",4000),
-        ("Maria","Anne","Jones","39192","F",4000),
-        ("Jen","Mary","Brown","","F",-1)
-      ]
+    from bs4 import BeautifulSoup
+    from pyspark.sql import SparkSession
+    import requests
 
-    schema = StructType([ \
-        StructField("firstname",StringType(),True), \
-        StructField("middlename",StringType(),True), \
-        StructField("lastname",StringType(),True), \
-        StructField("id", StringType(), True), \
-        StructField("gender", StringType(), True), \
-        StructField("salary", IntegerType(), True) \
-      ])
-    
-    df = spark.createDataFrame(data=data2,schema=schema)
-    df.printSchema()
+    url = "https://www.formula1.com/en/results.html/2022/races.html"
+    page = requests.get(url)
+
+    soup = BeautifulSoup(page.content, 'html.parser')
+
+    table = soup.find_all('table', class_='resultsarchive-table')[0]
+    rows = table.find_all('tr')
+
+    data = []
+
+    for row in rows[1:]:
+        cols = row.find_all('td')
+        race_name = cols[1].get_text().strip()
+        race_date = cols[2].get_text().strip()
+        winner = cols[3].get_text().strip()
+        car = cols[4].get_text().strip()
+        laps = cols[5].get_text().strip()
+        time = cols[6].get_text().strip()
+        data.append([race_name, race_date, winner, car, laps, time])
+
+    spark = SparkSession.builder.appName('F1').getOrCreate()
+
+    columns = ['GRAND PRIX', 'DATE', 'WINNER', 'CAR', 'LAPS', 'TIME']
+    df = spark.createDataFrame(data, columns)
+    df = df.withColumnRenamed('GRAND PRIX', 'GRAND_PRIX')
     df.show(truncate=False)
-    return df
-
-def data_transformation(df):
-    # Seleccionar sólo las columnas necesarias
-    df = df[["Pos", "Driver", "Nationality", "Car", "PTS"]]
-
-    # Crear una nueva columna "Acronym" con los últimos 3 caracteres de la columna "Driver"
-    df["Acronym"] = df["Driver"].str.slice(-3)
-
-    # Quitar los últimos 3 caracteres de la columna "Driver"
-    df["Driver"] = df["Driver"].str.slice(stop=-3)
-
-    now = datetime.now()
-
-    epoch_time = int(now.timestamp())
-
-    df["Date"] = epoch_time
-
-    new_name = {"Pos": "Position","Car": "Team", "PTS": "Points"}
-    df = df.rename(columns=new_name)
-
-    # Convertir la columna "PTS" a un tipo de datos de cadena
-    df["Points"] = df["Points"].astype(str)
-    df["Date"] = df["Date"].astype(str)
-    df["Position"] = df["Position"].astype(str)
     return df
 
 def load_data(df):
@@ -100,6 +86,16 @@ spark.conf.set('temporaryGcsBucket', bucket)
 #   .load()
 drivers.createOrReplaceTempView('drivers')
 
+# Definir el esquema
+schema = StructType([
+    StructField("GRAND_PRIX", StringType(), True),
+    StructField("DATE", StringType(), True),
+    StructField("WINNER", StringType(), True),
+    StructField("CAR", StringType(), True),
+    StructField("LAPS", StringType(), True),
+    StructField("TIME", StringType(), True)
+])
+
 # Load all data
 data_f1 = spark.sql(
     """SELECT 
@@ -111,7 +107,7 @@ data_f1.printSchema()
 
 # Saving the data to BigQuery
 data_f1.write.format('bigquery') \
-  .option('table', 'airflow-gke-381100.data_f1.results_dataprocalready') \
+  .option('table', 'airflow-gke-381100.data_f1.results_dataproc') \
   .option('temporaryGcsBucket', 'dataproc-test-381100') \
   .mode('append') \
   .save()
