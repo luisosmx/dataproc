@@ -4,6 +4,8 @@ import requests
 from bs4 import BeautifulSoup
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType, StructField, StringType
+import json
+
 
 spark = SparkSession \
   .builder \
@@ -40,13 +42,24 @@ def data_extraction(response) -> DataFrame:
         time = cols[6].get_text().strip()
         data.append([race_name, race_date, winner, car, laps, time])
 
-    spark = SparkSession.builder.appName('F1').getOrCreate()
+    #columns = ['GRAND PRIX', 'DATE', 'WINNER', 'CAR', 'LAPS', 'TIME']
 
-    columns = ['GRAND PRIX', 'DATE', 'WINNER', 'CAR', 'LAPS', 'TIME']
-    df = spark.createDataFrame(data, columns)
-    df = df.withColumnRenamed('GRAND PRIX', 'GRAND_PRIX')
+    # Definir el esquema
+    schema = StructType([
+        StructField("GRAND_PRIX", StringType(), True),
+        StructField("DATE", StringType(), True),
+        StructField("WINNER", StringType(), True),
+        StructField("CAR", StringType(), True),
+        StructField("LAPS", StringType(), True),
+        StructField("TIME", StringType(), True)
+    ])
+    df = spark.createDataFrame(data=data, schema=schema)
+    #imprime esquema
+    print("imprime esquema")
+    df.printSchema()
+    print("imprime datos")
     df.show(truncate=False)
-    return df
+    return df, schema
 
 def load_data(df):
     try:
@@ -57,7 +70,7 @@ def load_data(df):
 
         # Convertir Pandas DataFrame a PySpark DataFrame
         spark_df = spark.createDataFrame(df)
-
+        
         # Escribir datos en formato parquet
         spark_df.write.mode('overwrite').parquet("gs://dataproc-test-381100/main.py")
 
@@ -69,7 +82,7 @@ def load_data(df):
         return "Error"
 
 #response = requests.get(url)
-drivers = data_extraction(None)
+drivers, schema = data_extraction(None)
 #df = data_transformation(df)
 #result = load_data(df)
 
@@ -86,15 +99,8 @@ spark.conf.set('temporaryGcsBucket', bucket)
 #   .load()
 drivers.createOrReplaceTempView('drivers')
 
-# Definir el esquema
-schema = StructType([
-    StructField("GRAND_PRIX", StringType(), True),
-    StructField("DATE", StringType(), True),
-    StructField("WINNER", StringType(), True),
-    StructField("CAR", StringType(), True),
-    StructField("LAPS", StringType(), True),
-    StructField("TIME", StringType(), True)
-])
+
+
 
 # Load all data
 data_f1 = spark.sql(
@@ -104,10 +110,10 @@ data_f1 = spark.sql(
         """)
 data_f1.show()
 data_f1.printSchema()
-
 # Saving the data to BigQuery
 data_f1.write.format('bigquery') \
-  .option('table', 'airflow-gke-381100.data_f1.results_dataproc') \
+  .option('table', 'airflow-gke-381100.data_f1.test') \
   .option('temporaryGcsBucket', 'dataproc-test-381100') \
+  .option('schema', json.dumps(schema.jsonValue())) \
   .mode('append') \
   .save()
